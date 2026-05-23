@@ -3,6 +3,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid, BarChart, Bar, Cell
 } from "recharts";
+import TradeChart from "./TradeChart.jsx";
 
 // ─── Константы ───────────────────────────────────────────────────────────────
 
@@ -217,6 +218,7 @@ export default function App() {
   const [report, setReport] = useState(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [chartTrade, setChartTrade] = useState(null);
   const [filterExchange, setFilterExchange] = useState("ALL");
   const [form, setForm] = useState({
     date: new Date().toISOString().split("T")[0],
@@ -375,6 +377,7 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: "#010409", color: "#e6edf3", fontFamily: "monospace", backgroundImage: "radial-gradient(ellipse at 20% 50%, #0d1f0d 0%, transparent 50%), radial-gradient(ellipse at 80% 20%, #0a1628 0%, transparent 50%)" }}>
       {showModal && <ExchangeModal onClose={() => setShowModal(false)} onImport={importTrades} />}
+      {chartTrade && <TradeChart trade={chartTrade} onClose={() => setChartTrade(null)} />}
 
       {/* Header */}
       <div style={{ borderBottom: "1px solid #21262d", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(13,17,23,0.95)", backdropFilter: "blur(10px)", position: "sticky", top: 0, zIndex: 100, flexWrap: "wrap", gap: 8 }}>
@@ -458,7 +461,8 @@ export default function App() {
                   <div style={{ fontSize: 11, color: "#58a6ff" }}>1:{calcRR(trade)}</div>
                   <div style={{ fontSize: 13, fontWeight: "bold", color: pnl >= 0 ? "#39d353" : "#f85149" }}>{pnl >= 0 ? "+" : ""}{fmt(pnl)}</div>
                   <div style={{ fontSize: 10, color: "#8b949e", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }}>{trade.reason || "—"}</div>
-                  <div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button onClick={() => setChartTrade(trade)} style={{ background: "#0d1117", border: "1px solid #21262d", color: "#8b949e", padding: "3px 8px", borderRadius: 3, cursor: "pointer", fontSize: 9, fontFamily: "monospace" }} title="График">📈</button>
                     {trade.aiAnalysis
                       ? <button onClick={() => { setSelectedTrade(trade); setView("analysis"); }} style={{ background: "#0d2e1a", border: "1px solid #39d353", color: "#39d353", padding: "3px 8px", borderRadius: 3, cursor: "pointer", fontSize: 9, fontFamily: "monospace" }}>✓ РАЗБОР</button>
                       : <button onClick={() => analyzeWithAI(trade)} disabled={loading === trade.id} style={{ background: "#0a1628", border: "1px solid #58a6ff", color: loading === trade.id ? "#8b949e" : "#58a6ff", padding: "3px 8px", borderRadius: 3, cursor: "pointer", fontSize: 9, fontFamily: "monospace" }}>
@@ -727,3 +731,5 @@ export default function App() {
     </div>
   );
 }
+
+// ═══ ЭТОТ ФАЙЛ ЗАМЕНЁН — см. AppNew.jsx ═══
