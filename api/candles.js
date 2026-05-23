@@ -11,7 +11,7 @@ export default async function handler(req, res) {
   const endMs = end ? parseInt(end) : Date.now();
 
   async function fetchBybit(category, iv) {
-    const url = `https://api.bybit.com/v5/market/kline?symbol=${symbol}&interval=${iv}&start=${startMs}&end=${endMs}&limit=200&category=${category}`;
+    const url = `https://api.bybit.com/v5/market/kline?symbol=${symbol}&interval=${iv}&start=${startMs}&end=${endMs}&limit=500&category=${category}`;
     const r = await fetch(url);
     const text = await r.text();
     try { return JSON.parse(text); } catch { return null; }

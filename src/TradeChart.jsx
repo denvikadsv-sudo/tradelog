@@ -101,8 +101,9 @@ export default function TradeChart({ trade, onClose }) {
     setError(null);
     try {
       const tradeDate = new Date(trade.date);
-      const startMs = tradeDate.getTime() - 3 * 24 * 60 * 60 * 1000;
-      const endMs = tradeDate.getTime() + 3 * 24 * 60 * 60 * 1000;
+      // Больше истории — 7 дней до и 2 дня после
+      const startMs = tradeDate.getTime() - 7 * 24 * 60 * 60 * 1000;
+      const endMs = tradeDate.getTime() + 2 * 24 * 60 * 60 * 1000;
 
       const resp = await fetch(`/api/candles?symbol=${trade.ticker}&start=${startMs}&end=${endMs}&interval=${tf}`);
       const data = await resp.json();
@@ -145,43 +146,6 @@ export default function TradeChart({ trade, onClose }) {
       }
 
       seriesRef.current.setMarkers(markers);
-
-      // Линии входа/выхода/стопа/тейка
-      const lines = [];
-      if (trade.entry) lines.push({
-        price: trade.entry,
-        color: "#39d353",
-        lineWidth: 1,
-        lineStyle: 2, // dashed
-        axisLabelVisible: true,
-        title: "ВХОД",
-      });
-      if (trade.exit && trade.exit !== trade.entry) lines.push({
-        price: trade.exit,
-        color: Number(trade.result) >= 0 ? "#39d353" : "#f85149",
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: true,
-        title: "ВЫХОД",
-      });
-      if (trade.stopLoss > 0) lines.push({
-        price: trade.stopLoss,
-        color: "#f85149",
-        lineWidth: 1,
-        lineStyle: 3,
-        axisLabelVisible: true,
-        title: "СТОП",
-      });
-      if (trade.takeProfit > 0) lines.push({
-        price: trade.takeProfit,
-        color: "#39d353",
-        lineWidth: 1,
-        lineStyle: 3,
-        axisLabelVisible: true,
-        title: "ТЕЙК",
-      });
-
-      lines.forEach(l => seriesRef.current.createPriceLine(l));
 
       // Фитируем видимую область вокруг сделки
       chartRef.current.timeScale().fitContent();
