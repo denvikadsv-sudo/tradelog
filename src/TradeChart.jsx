@@ -31,15 +31,27 @@ export default function TradeChart({ trade, onClose }) {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Загружаем lightweight-charts динамически
+    // Если библиотека уже загружена — сразу инициализируем
+    if (window.LightweightCharts) {
+      initChart();
+      return;
+    }
+
+    // Иначе загружаем
+    const existing = document.getElementById("lwc-script");
+    if (existing) {
+      existing.addEventListener("load", initChart);
+      return () => existing.removeEventListener("load", initChart);
+    }
+
     const script = document.createElement("script");
+    script.id = "lwc-script";
     script.src = "https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js";
     script.onload = () => initChart();
     document.head.appendChild(script);
 
     return () => {
       if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
-      document.head.removeChild(script);
     };
   }, []);
 
