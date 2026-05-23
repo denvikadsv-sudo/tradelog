@@ -1,3 +1,6 @@
+// api/bybit.js — Vercel Serverless Function
+// Проксирует запросы к Bybit API v5
+
 import crypto from 'crypto';
 
 export default async function handler(req, res) {
@@ -6,116 +9,77 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const { apiKey, apiSecret, startTime, endTime } = req.body || req.query;
-  if (!apiKey || !apiSecret) return res.status(400).json({ error: 'API key and secret required' });
+  const { apiKey, apiSecret, startTime, endTime, category = 'spot' } = req.body || req.query;
 
-  const timestamp = Date.now().toString();
-  const recvWindow = '20000';
-  let allTrades = [];
+  if (!apiKey || !apiSecret) {
+    return res.status(400).json({ error: 'API key and secret required' });
+  }
 
-  async function bybitRequest(endpoint, params = {}) {
-    const p = new URLSearchParams({ limit: '200', ...params });
-    const paramStr = p.toString();
-    const signature = crypto.createHmac('sha256', apiSecret)
-      .update(`${timestamp}${apiKey}${recvWindow}${paramStr}`).digest('hex');
-    const response = await fetch(`https://api.bybit.com${endpoint}?${paramStr}`, {
+  try {
+    const timestamp = Date.now().toString();
+    const recvWindow = '5000';
+
+    const params = new URLSearchParams({
+      category,
+      limit: '200',
+    });
+    if (startTime) params.append('startTime', startTime);
+    if (endTime) params.append('endTime', endTime);
+
+    const paramStr = params.toString();
+    const signPayload = `${timestamp}${apiKey}${recvWindow}${paramStr}`;
+    const signature = crypto
+      .createHmac('sha256', apiSecret)
+      .update(signPayload)
+      .digest('hex');
+
+    const url = `https://api.bybit.com/v5/execution/list?${paramStr}`;
+
+    const response = await fetch(url, {
       headers: {
         'X-BAPI-API-KEY': apiKey,
         'X-BAPI-SIGN': signature,
         'X-BAPI-TIMESTAMP': timestamp,
         'X-BAPI-RECV-WINDOW': recvWindow,
+        'Content-Type': 'application/json',
       },
     });
-    const text = await response.text();
-    try { return JSON.parse(text); } catch { return null; }
-  }
 
-  try {
-    // 1. Закрытые позиции — closed-pnl НЕ поддерживает startTime/endTime
-    for (const category of ['linear', 'inverse']) {
-      const data = await bybitRequest('/v5/position/closed-pnl', { category });
-      if (data?.retCode === 0 && data.result?.list?.length > 0) {
-        const normalized = data.result.list.map(t => ({
-          id: `bybit_pnl_${t.orderId}`,
-          exchange: 'Bybit',
-          date: new Date(parseInt(t.updatedTime)).toISOString().split('T')[0],
-          ticker: t.symbol,
-          direction: t.side === 'Sell' ? 'LONG' : 'SHORT',
-          entry: parseFloat(t.avgEntryPrice || 0),
-          exit: parseFloat(t.avgExitPrice || 0),
-          size: parseFloat(t.qty || 0),
-          stopLoss: 0,
-          takeProfit: 0,
-          commission: parseFloat(t.cumEntryFee || 0) + parseFloat(t.cumExitFee || 0),
-          result: Math.round(parseFloat(t.closedPnl || 0) * 100) / 100,
-          reason: `Импорт с Bybit (${category})`,
-          emotion: 'Спокоен',
-          aiAnalysis: null,
-        }));
-        allTrades = [...allTrades, ...normalized];
-      }
+    const data = await response.json();
+
+    if (data.retCode !== 0) {
+      return res.status(400).json({ error: data.retMsg || 'Bybit API error' });
     }
 
-    // 2. История исполнений — поддерживает startTime/endTime
-    if (allTrades.length === 0) {
-      for (const category of ['linear', 'spot', 'inverse']) {
-        const params = { category };
-        if (startTime) params.startTime = startTime.toString();
-        if (endTime) params.endTime = endTime.toString();
-        const data = await bybitRequest('/v5/execution/list', params);
-        if (data?.retCode === 0 && data.result?.list?.length > 0) {
-          const normalized = data.result.list.map(t => ({
-            id: `bybit_exec_${t.execId}`,
-            exchange: 'Bybit',
-            date: new Date(parseInt(t.execTime)).toISOString().split('T')[0],
-            ticker: t.symbol,
-            direction: t.side === 'Buy' ? 'LONG' : 'SHORT',
-            entry: parseFloat(t.execPrice),
-            exit: parseFloat(t.execPrice),
-            size: parseFloat(t.execQty),
-            stopLoss: 0,
-            takeProfit: 0,
-            commission: parseFloat(t.execFee || 0),
-            result: Math.round(parseFloat(t.closedPnl || 0) * 100) / 100,
-            reason: `Импорт с Bybit (${category})`,
-            emotion: 'Спокоен',
-            aiAnalysis: null,
-          }));
-          allTrades = [...allTrades, ...normalized];
-        }
-      }
-    }
+    const executions = data.result?.list || [];
 
-    // 3. История ордеров спот
-    if (allTrades.length === 0) {
-      const params = { category: 'spot', orderStatus: 'Filled' };
-      if (startTime) params.startTime = startTime.toString();
-      if (endTime) params.endTime = endTime.toString();
-      const data = await bybitRequest('/v5/order/history', params);
-      if (data?.retCode === 0 && data.result?.list?.length > 0) {
-        const normalized = data.result.list.map(t => ({
-          id: `bybit_order_${t.orderId}`,
-          exchange: 'Bybit',
-          date: new Date(parseInt(t.updatedTime)).toISOString().split('T')[0],
-          ticker: t.symbol,
-          direction: t.side === 'Buy' ? 'LONG' : 'SHORT',
-          entry: parseFloat(t.avgPrice || t.price),
-          exit: parseFloat(t.avgPrice || t.price),
-          size: parseFloat(t.qty),
-          stopLoss: parseFloat(t.stopLoss || 0),
-          takeProfit: parseFloat(t.takeProfit || 0),
-          commission: 0,
-          result: 0,
-          reason: 'Импорт с Bybit (spot)',
-          emotion: 'Спокоен',
-          aiAnalysis: null,
-        }));
-        allTrades = [...allTrades, ...normalized];
-      }
-    }
+    // Нормализуем под наш формат
+    const normalized = executions.map(t => {
+      const pnl = parseFloat(t.closedPnl || 0);
+      return {
+        id: `bybit_${t.execId}`,
+        exchange: 'Bybit',
+        date: new Date(parseInt(t.execTime)).toISOString().split('T')[0],
+        ticker: t.symbol,
+        direction: t.side === 'Buy' ? 'LONG' : 'SHORT',
+        entry: parseFloat(t.execPrice),
+        exit: parseFloat(t.execPrice),
+        size: parseFloat(t.execQty),
+        stopLoss: 0,
+        takeProfit: 0,
+        commission: parseFloat(t.execFee || 0),
+        commissionAsset: t.feeCurrency || 'USDT',
+        result: pnl,
+        reason: 'Импорт с Bybit',
+        emotion: 'Спокоен',
+        aiAnalysis: null,
+        raw: t,
+      };
+    });
 
-    return res.status(200).json({ trades: allTrades, total: allTrades.length });
+    return res.status(200).json({ trades: normalized, total: normalized.length });
   } catch (error) {
+    console.error('Bybit proxy error:', error);
     return res.status(500).json({ error: error.message });
   }
 }

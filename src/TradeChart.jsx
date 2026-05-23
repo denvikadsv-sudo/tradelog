@@ -1,202 +1,251 @@
 import { useEffect, useRef, useState } from "react";
 
+const TIMEFRAMES = [
+  { label: "1м", interval: "1" },
+  { label: "5м", interval: "5" },
+  { label: "15м", interval: "15" },
+  { label: "30м", interval: "30" },
+  { label: "1ч", interval: "60" },
+  { label: "4ч", interval: "240" },
+  { label: "1д", interval: "D" },
+];
+
 export default function TradeChart({ trade, onClose }) {
-  const [candles, setCandles] = useState([]);
+  const containerRef = useRef(null);
+  const chartRef = useRef(null);
+  const seriesRef = useRef(null);
+  const [tf, setTf] = useState("15");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const canvasRef = useRef(null);
+  const [pct, setPct] = useState(null);
 
+  // Вычисляем % между входом и выходом
   useEffect(() => {
-    async function load() {
-      try {
-        setLoading(true);
-        // Конвертируем дату сделки в timestamp
-        const tradeDate = new Date(trade.date);
-        const startMs = tradeDate.getTime() - 2 * 60 * 60 * 1000; // -2ч
-        const endMs = tradeDate.getTime() + 6 * 60 * 60 * 1000;   // +6ч
-
-        const resp = await fetch(`/api/candles?symbol=${trade.ticker}&start=${startMs}&end=${endMs}`);
-        const data = await resp.json();
-        if (data.error) throw new Error(data.error);
-        setCandles(data.candles || []);
-      } catch (e) {
-        setError(e.message);
-      }
-      setLoading(false);
+    if (trade.entry && trade.exit) {
+      const dir = trade.direction === "LONG" ? 1 : -1;
+      const p = ((trade.exit - trade.entry) / trade.entry * 100 * dir);
+      setPct(p.toFixed(2));
     }
-    load();
   }, [trade]);
 
   useEffect(() => {
-    if (!candles.length || !canvasRef.current) return;
-    drawChart();
-  }, [candles]);
+    if (!containerRef.current) return;
 
-  function drawChart() {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    const W = canvas.width;
-    const H = canvas.height;
-    const PAD = { top: 20, right: 80, bottom: 40, left: 10 };
-    const chartW = W - PAD.left - PAD.right;
-    const chartH = H - PAD.top - PAD.bottom;
+    // Загружаем lightweight-charts динамически
+    const script = document.createElement("script");
+    script.src = "https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js";
+    script.onload = () => initChart();
+    document.head.appendChild(script);
 
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = "#0d1117";
-    ctx.fillRect(0, 0, W, H);
+    return () => {
+      if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
+      document.head.removeChild(script);
+    };
+  }, []);
 
-    if (!candles.length) return;
+  useEffect(() => {
+    if (chartRef.current && seriesRef.current) loadCandles();
+  }, [tf]);
 
-    const highs = candles.map(c => c.high);
-    const lows = candles.map(c => c.low);
-    const maxP = Math.max(...highs, trade.entry, trade.exit);
-    const minP = Math.min(...lows, trade.entry, trade.exit);
-    const range = maxP - minP || 1;
+  function initChart() {
+    if (!containerRef.current || !window.LightweightCharts) return;
 
-    const toX = i => PAD.left + (i / (candles.length - 1)) * chartW;
-    const toY = p => PAD.top + chartH - ((p - minP) / range) * chartH;
-    const candleW = Math.max(2, Math.floor(chartW / candles.length) - 1);
-
-    // Grid
-    ctx.strokeStyle = "#161b22";
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 4; i++) {
-      const y = PAD.top + (chartH / 4) * i;
-      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
-      const price = maxP - (range / 4) * i;
-      ctx.fillStyle = "#8b949e";
-      ctx.font = "10px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(price.toFixed(price > 100 ? 1 : 4), W - PAD.right + 4, y + 4);
-    }
-
-    // Свечи
-    candles.forEach((c, i) => {
-      const x = toX(i);
-      const isGreen = c.close >= c.open;
-      const color = isGreen ? "#39d353" : "#f85149";
-      const bodyTop = toY(Math.max(c.open, c.close));
-      const bodyBot = toY(Math.min(c.open, c.close));
-      const bodyH = Math.max(1, bodyBot - bodyTop);
-
-      // Тень
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, toY(c.high));
-      ctx.lineTo(x, toY(c.low));
-      ctx.stroke();
-
-      // Тело
-      ctx.fillStyle = color;
-      ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
+    const chart = window.LightweightCharts.createChart(containerRef.current, {
+      width: containerRef.current.clientWidth,
+      height: 420,
+      layout: { background: { color: "#0d1117" }, textColor: "#8b949e" },
+      grid: { vertLines: { color: "#161b22" }, horzLines: { color: "#161b22" } },
+      crosshair: { mode: window.LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: "#21262d" },
+      timeScale: { borderColor: "#21262d", timeVisible: true, secondsVisible: false },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true },
+      handleScale: { mouseWheel: true, pinch: true },
     });
 
-    // Линия входа
-    const entryY = toY(trade.entry);
-    ctx.strokeStyle = "#39d353";
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([6, 3]);
-    ctx.beginPath(); ctx.moveTo(PAD.left, entryY); ctx.lineTo(W - PAD.right, entryY); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = "#39d353";
-    ctx.font = "bold 10px monospace";
-    ctx.textAlign = "left";
-    ctx.fillText(`ВХОД ${trade.entry}`, W - PAD.right + 4, entryY + 4);
+    const series = chart.addCandlestickSeries({
+      upColor: "#39d353",
+      downColor: "#f85149",
+      borderUpColor: "#39d353",
+      borderDownColor: "#f85149",
+      wickUpColor: "#39d353",
+      wickDownColor: "#f85149",
+    });
 
-    // Линия выхода
-    if (trade.exit && trade.exit !== trade.entry) {
-      const exitY = toY(trade.exit);
-      const exitColor = Number(trade.result) >= 0 ? "#39d353" : "#f85149";
-      ctx.strokeStyle = exitColor;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([6, 3]);
-      ctx.beginPath(); ctx.moveTo(PAD.left, exitY); ctx.lineTo(W - PAD.right, exitY); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = exitColor;
-      ctx.fillText(`ВЫХОД ${trade.exit}`, W - PAD.right + 4, exitY + 4);
-    }
+    chartRef.current = chart;
+    seriesRef.current = series;
 
-    // Стоп
-    if (trade.stopLoss && trade.stopLoss > 0) {
-      const slY = toY(trade.stopLoss);
-      ctx.strokeStyle = "#f85149";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      ctx.globalAlpha = 0.5;
-      ctx.beginPath(); ctx.moveTo(PAD.left, slY); ctx.lineTo(W - PAD.right, slY); ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.setLineDash([]);
-    }
+    // Resize observer
+    const ro = new ResizeObserver(() => {
+      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+    });
+    ro.observe(containerRef.current);
 
-    // Тейк
-    if (trade.takeProfit && trade.takeProfit > 0) {
-      const tpY = toY(trade.takeProfit);
-      ctx.strokeStyle = "#39d353";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      ctx.globalAlpha = 0.5;
-      ctx.beginPath(); ctx.moveTo(PAD.left, tpY); ctx.lineTo(W - PAD.right, tpY); ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.setLineDash([]);
-    }
+    loadCandles();
+  }
 
-    // Дата снизу
-    ctx.fillStyle = "#8b949e";
-    ctx.font = "9px monospace";
-    ctx.textAlign = "center";
-    [0, Math.floor(candles.length/4), Math.floor(candles.length/2), Math.floor(candles.length*3/4), candles.length-1].forEach(i => {
-      if (candles[i]) {
-        const d = new Date(candles[i].time * 1000);
-        const label = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
-        ctx.fillText(label, toX(i), H - PAD.bottom + 14);
+  async function loadCandles() {
+    if (!seriesRef.current) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const tradeDate = new Date(trade.date);
+      const startMs = tradeDate.getTime() - 3 * 24 * 60 * 60 * 1000;
+      const endMs = tradeDate.getTime() + 3 * 24 * 60 * 60 * 1000;
+
+      const resp = await fetch(`/api/candles?symbol=${trade.ticker}&start=${startMs}&end=${endMs}&interval=${tf}`);
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      if (!data.candles?.length) throw new Error("Нет данных по этому тикеру");
+
+      seriesRef.current.setData(data.candles);
+
+      // Маркеры входа и выхода
+      const entryTime = Math.floor(new Date(trade.date).getTime() / 1000);
+      // Находим ближайшую свечу к дате сделки
+      const nearest = data.candles.reduce((prev, cur) =>
+        Math.abs(cur.time - entryTime) < Math.abs(prev.time - entryTime) ? cur : prev
+      );
+
+      const markers = [];
+
+      // Вход
+      markers.push({
+        time: nearest.time,
+        position: trade.direction === "LONG" ? "belowBar" : "aboveBar",
+        color: "#39d353",
+        shape: trade.direction === "LONG" ? "arrowUp" : "arrowDown",
+        text: `ВХОД ${trade.entry}`,
+        size: 2,
+      });
+
+      // Выход (если есть и отличается от входа)
+      if (trade.exit && trade.exit !== trade.entry) {
+        // Ищем свечу чуть позже входа
+        const exitCandle = data.candles.find(c => c.time > nearest.time) || nearest;
+        markers.push({
+          time: exitCandle.time,
+          position: trade.direction === "LONG" ? "aboveBar" : "belowBar",
+          color: Number(trade.result) >= 0 ? "#39d353" : "#f85149",
+          shape: trade.direction === "LONG" ? "arrowDown" : "arrowUp",
+          text: `ВЫХОД ${trade.exit}`,
+          size: 2,
+        });
       }
-    });
+
+      seriesRef.current.setMarkers(markers);
+
+      // Линии входа/выхода/стопа/тейка
+      const lines = [];
+      if (trade.entry) lines.push({
+        price: trade.entry,
+        color: "#39d353",
+        lineWidth: 1,
+        lineStyle: 2, // dashed
+        axisLabelVisible: true,
+        title: "ВХОД",
+      });
+      if (trade.exit && trade.exit !== trade.entry) lines.push({
+        price: trade.exit,
+        color: Number(trade.result) >= 0 ? "#39d353" : "#f85149",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "ВЫХОД",
+      });
+      if (trade.stopLoss > 0) lines.push({
+        price: trade.stopLoss,
+        color: "#f85149",
+        lineWidth: 1,
+        lineStyle: 3,
+        axisLabelVisible: true,
+        title: "СТОП",
+      });
+      if (trade.takeProfit > 0) lines.push({
+        price: trade.takeProfit,
+        color: "#39d353",
+        lineWidth: 1,
+        lineStyle: 3,
+        axisLabelVisible: true,
+        title: "ТЕЙК",
+      });
+
+      lines.forEach(l => seriesRef.current.createPriceLine(l));
+
+      // Фитируем видимую область вокруг сделки
+      chartRef.current.timeScale().fitContent();
+
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoading(false);
   }
 
   const pnl = Number(trade.result);
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: "#0d1117", border: "1px solid #30363d", borderRadius: 8, padding: 24, width: "min(900px, 95vw)", maxHeight: "90vh", overflow: "auto" }}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.9)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: "#0d1117", border: "1px solid #30363d", borderRadius: 8, padding: 20, width: "min(1000px, 96vw)", maxHeight: "92vh", overflow: "auto" }}>
+
         {/* Header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 16, fontWeight: "bold", fontFamily: "monospace" }}>{trade.ticker}</span>
-            <span style={{ background: trade.direction === "LONG" ? "#0d2e0d" : "#2e0d0d", color: trade.direction === "LONG" ? "#39d353" : "#f85149", padding: "2px 8px", borderRadius: 3, fontSize: 11 }}>{trade.direction}</span>
-            <span style={{ fontSize: 13, fontWeight: "bold", color: pnl >= 0 ? "#39d353" : "#f85149" }}>{pnl >= 0 ? "+" : ""}{pnl} USDT</span>
-            <span style={{ fontSize: 11, color: "#8b949e" }}>{trade.date}</span>
+            <span style={{ background: trade.direction === "LONG" ? "#0d2e0d" : "#2e0d0d", color: trade.direction === "LONG" ? "#39d353" : "#f85149", padding: "2px 8px", borderRadius: 3, fontSize: 11, fontFamily: "monospace" }}>{trade.direction}</span>
+            <span style={{ fontSize: 13, fontWeight: "bold", color: pnl >= 0 ? "#39d353" : "#f85149", fontFamily: "monospace" }}>{pnl >= 0 ? "+" : ""}{pnl} USDT</span>
+            {pct !== null && (
+              <span style={{ background: "#161b22", border: `1px solid ${Number(pct) >= 0 ? "#39d353" : "#f85149"}`, color: Number(pct) >= 0 ? "#39d353" : "#f85149", padding: "2px 10px", borderRadius: 3, fontSize: 12, fontFamily: "monospace", fontWeight: "bold" }}>
+                {Number(pct) >= 0 ? "+" : ""}{pct}%
+              </span>
+            )}
+            <span style={{ fontSize: 11, color: "#8b949e", fontFamily: "monospace" }}>{trade.date}</span>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#8b949e", cursor: "pointer", fontSize: 20, fontFamily: "monospace" }}>×</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#8b949e", cursor: "pointer", fontSize: 22 }}>×</button>
         </div>
 
-        {/* Легенда */}
-        <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 10, fontFamily: "monospace" }}>
-          <span style={{ color: "#39d353" }}>── ВХОД {trade.entry}</span>
-          <span style={{ color: pnl >= 0 ? "#39d353" : "#f85149" }}>── ВЫХОД {trade.exit}</span>
-          {trade.stopLoss > 0 && <span style={{ color: "#f85149", opacity: 0.6 }}>- - СТОП {trade.stopLoss}</span>}
-          {trade.takeProfit > 0 && <span style={{ color: "#39d353", opacity: 0.6 }}>- - ТЕЙК {trade.takeProfit}</span>}
+        {/* Таймфреймы */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          {TIMEFRAMES.map(t => (
+            <button key={t.interval} onClick={() => setTf(t.interval)} style={{
+              padding: "4px 12px", borderRadius: 3, cursor: "pointer", fontFamily: "monospace", fontSize: 11,
+              background: tf === t.interval ? "#21262d" : "transparent",
+              border: `1px solid ${tf === t.interval ? "#58a6ff" : "#21262d"}`,
+              color: tf === t.interval ? "#58a6ff" : "#8b949e",
+            }}>{t.label}</button>
+          ))}
+          <div style={{ marginLeft: "auto", fontSize: 10, color: "#8b949e", alignSelf: "center", fontFamily: "monospace" }}>
+            🖱 колесо — масштаб · перетащить — прокрутка
+          </div>
         </div>
 
         {/* График */}
-        {loading && <div style={{ textAlign: "center", padding: 60, color: "#58a6ff", fontFamily: "monospace", fontSize: 12 }}>ЗАГРУЖАЮ СВЕЧИ...</div>}
-        {error && <div style={{ textAlign: "center", padding: 60, color: "#f85149", fontFamily: "monospace", fontSize: 12 }}>⚠ {error}<br/><span style={{color:"#8b949e",fontSize:10}}>График доступен только для сделок с Bybit</span></div>}
-        {!loading && !error && (
-          <canvas ref={canvasRef} width={860} height={400} style={{ width: "100%", borderRadius: 4, border: "1px solid #21262d" }} />
-        )}
+        <div style={{ position: "relative", borderRadius: 4, overflow: "hidden", border: "1px solid #21262d" }}>
+          <div ref={containerRef} style={{ width: "100%", minHeight: 420 }} />
+          {loading && (
+            <div style={{ position: "absolute", inset: 0, background: "rgba(13,17,23,0.8)", display: "flex", alignItems: "center", justifyContent: "center", color: "#58a6ff", fontFamily: "monospace", fontSize: 12 }}>
+              ЗАГРУЖАЮ СВЕЧИ...
+            </div>
+          )}
+          {error && (
+            <div style={{ position: "absolute", inset: 0, background: "rgba(13,17,23,0.9)", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
+              <div style={{ color: "#f85149", fontFamily: "monospace", fontSize: 12 }}>⚠ {error}</div>
+              <div style={{ color: "#8b949e", fontFamily: "monospace", fontSize: 10 }}>График доступен только для сделок с Bybit</div>
+            </div>
+          )}
+        </div>
 
         {/* Инфо */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginTop: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8, marginTop: 14 }}>
           {[
-            ["ВХОД", trade.entry],
-            ["ВЫХОД", trade.exit],
-            ["СТОП", trade.stopLoss || "—"],
-            ["ТЕЙК", trade.takeProfit || "—"],
-            ["RR", `1:${trade.stopLoss ? (Math.abs(trade.takeProfit - trade.entry) / Math.abs(trade.entry - trade.stopLoss)).toFixed(2) : "—"}`],
-          ].map(([k, v]) => (
+            ["ВХОД", trade.entry, "#e6edf3"],
+            ["ВЫХОД", trade.exit, "#e6edf3"],
+            ["ИЗМЕНЕНИЕ", pct !== null ? `${Number(pct) >= 0 ? "+" : ""}${pct}%` : "—", Number(pct) >= 0 ? "#39d353" : "#f85149"],
+            ["СТОП", trade.stopLoss || "—", "#f85149"],
+            ["ТЕЙК", trade.takeProfit || "—", "#39d353"],
+            ["RR", trade.stopLoss > 0 && trade.takeProfit > 0 ? `1:${(Math.abs(trade.takeProfit - trade.entry) / Math.abs(trade.entry - trade.stopLoss)).toFixed(2)}` : "—", "#58a6ff"],
+          ].map(([k, v, color]) => (
             <div key={k} style={{ background: "#161b22", borderRadius: 4, padding: "10px 12px" }}>
-              <div style={{ fontSize: 9, color: "#8b949e", letterSpacing: 2, marginBottom: 4 }}>{k}</div>
-              <div style={{ fontSize: 13, fontWeight: "bold" }}>{v}</div>
+              <div style={{ fontSize: 9, color: "#8b949e", letterSpacing: 2, marginBottom: 4, fontFamily: "monospace" }}>{k}</div>
+              <div style={{ fontSize: 13, fontWeight: "bold", color, fontFamily: "monospace" }}>{v}</div>
             </div>
           ))}
         </div>
