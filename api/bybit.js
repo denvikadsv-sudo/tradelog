@@ -13,11 +13,9 @@ export default async function handler(req, res) {
   const recvWindow = '20000';
   let allTrades = [];
 
-  async function bybitRequest(endpoint, extraParams = {}) {
-    const params = new URLSearchParams({ limit: '200', ...extraParams });
-    if (startTime) params.append('startTime', startTime.toString());
-    if (endTime) params.append('endTime', endTime.toString());
-    const paramStr = params.toString();
+  async function bybitRequest(endpoint, params = {}) {
+    const p = new URLSearchParams({ limit: '200', ...params });
+    const paramStr = p.toString();
     const signature = crypto.createHmac('sha256', apiSecret)
       .update(`${timestamp}${apiKey}${recvWindow}${paramStr}`).digest('hex');
     const response = await fetch(`https://api.bybit.com${endpoint}?${paramStr}`, {
@@ -33,7 +31,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 1. Закрытые позиции (фьючерсы UTA) — самый важный endpoint
+    // 1. Закрытые позиции — closed-pnl НЕ поддерживает startTime/endTime
     for (const category of ['linear', 'inverse']) {
       const data = await bybitRequest('/v5/position/closed-pnl', { category });
       if (data?.retCode === 0 && data.result?.list?.length > 0) {
@@ -58,10 +56,13 @@ export default async function handler(req, res) {
       }
     }
 
-    // 2. История исполнений (если закрытых позиций нет)
+    // 2. История исполнений — поддерживает startTime/endTime
     if (allTrades.length === 0) {
       for (const category of ['linear', 'spot', 'inverse']) {
-        const data = await bybitRequest('/v5/execution/list', { category });
+        const params = { category };
+        if (startTime) params.startTime = startTime.toString();
+        if (endTime) params.endTime = endTime.toString();
+        const data = await bybitRequest('/v5/execution/list', params);
         if (data?.retCode === 0 && data.result?.list?.length > 0) {
           const normalized = data.result.list.map(t => ({
             id: `bybit_exec_${t.execId}`,
@@ -85,9 +86,12 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. История ордеров (спот)
+    // 3. История ордеров спот
     if (allTrades.length === 0) {
-      const data = await bybitRequest('/v5/order/history', { category: 'spot', orderStatus: 'Filled' });
+      const params = { category: 'spot', orderStatus: 'Filled' };
+      if (startTime) params.startTime = startTime.toString();
+      if (endTime) params.endTime = endTime.toString();
+      const data = await bybitRequest('/v5/order/history', params);
       if (data?.retCode === 0 && data.result?.list?.length > 0) {
         const normalized = data.result.list.map(t => ({
           id: `bybit_order_${t.orderId}`,
